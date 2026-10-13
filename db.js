@@ -50,6 +50,8 @@ if (count === 0) {
     .run(r1, 'Paneer Butter Masala', 220);
   db.prepare('INSERT INTO menu_items (restaurant_id, name, price) VALUES (?, ?, ?)')
     .run(r1, 'Butter Naan', 40);
+  db.prepare('INSERT INTO restaurants(name, lat, lng) VALUES (?, ?, ?)')
+    .run('Tasty Bites', 19.0760, 72.8777);
 }
 
 module.exports = db;
