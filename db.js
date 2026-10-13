@@ -157,6 +157,45 @@ app.post('/orders', auth, (req, res) => {
   res.status(201).json({ order_id: orderId, total });
 });
 
+// order history: only THIS user's orders
+app.get('/orders', auth, (req, res) => {
+  const orders = db
+    .prepare('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC')
+    .all(req.user.id)
+    .map((order) => ({
+      ...order,
+      items: db
+        .prepare(`
+          SELECT m.name, oi.qty, oi.price_at_order
+          FROM order_items oi
+          JOIN menu_items m ON m.id = oi.menu_item_id
+          WHERE oi.order_id = ?
+        `)
+        .all(order.id),
+    }));
+
+  res.json(orders);
+});
+
+// fake payment: placed -> paid
+app.post('/orders/:id/pay', auth, (req, res) => {
+  // id AND user_id: you can only pay for your own order
+  const order = db
+    .prepare('SELECT * FROM orders WHERE id = ? AND user_id = ?')
+    .get(req.params.id, req.user.id);
+
+  if (!order) {
+    return res.status(404).json({ error: 'Order not found' });
+  }
+  if (order.status === 'paid') {
+    return res.status(400).json({ error: 'Order already paid' });
+  }
+
+  db.prepare("UPDATE orders SET status = 'paid' WHERE id = ?").run(order.id);
+
+  res.json({ order_id: order.id, status: 'paid' });
+});
+
 app.listen(3000, () => {
   console.log('Running on http://localhost:3000');
 });
