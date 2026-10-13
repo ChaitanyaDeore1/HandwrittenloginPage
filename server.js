@@ -1,10 +1,14 @@
 const express = require('express');
 const db = require('./db.js');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 app.use(express.json());
 
 const MAX_KM = 10;
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret';
+const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 // Haversine: distance in km between two lat/lng points
 function distanceKm(lat1, lng1, lat2, lng2) {
@@ -28,22 +32,18 @@ app.get('/restaurants', (req, res) => {
 
 // must stay ABOVE '/restaurants/:id/menu'
 app.get('/restaurants/nearby', (req, res) => {
-  // 1. read lat, lng and convert to numbers
   const lat = parseFloat(req.query.lat);
   const lng = parseFloat(req.query.lng);
 
-  // 2. bad input -> 400
   if (isNaN(lat) || isNaN(lng)) {
     return res.status(400).json({ error: 'lat and lng are required numbers' });
   }
 
-  // 3-6. get all, add distance, keep within 10 km, nearest first
   const nearby = db.prepare('SELECT * FROM restaurants').all()
     .map((r) => ({ ...r, distance_km: +distanceKm(lat, lng, r.lat, r.lng).toFixed(2) }))
     .filter((r) => r.distance_km <= MAX_KM)
     .sort((a, b) => a.distance_km - b.distance_km);
 
-  // 7. send
   res.json(nearby);
 });
 
@@ -57,6 +57,67 @@ app.get('/restaurants/:id/menu', (req, res) => {
 
   const items = db.prepare('SELECT * FROM menu_items WHERE restaurant_id = ?').all(id);
   res.json(items);
+});
+
+app.post('/send-otp', (req, res) => {
+  const phone = req.body.phone;
+
+  if (!/^\d{10}$/.test(phone || '')) {
+    return res.status(400).json({ error: 'Enter a 10 digit phone number' });
+  }
+
+  const otp = String(crypto.randomInt(100000, 1000000)); // 6 digits
+  const expires_at = Date.now() + 5 * 60 * 1000;         // 5 minutes
+
+  db.prepare('INSERT OR REPLACE INTO otps (phone, otp_hash, expires_at, attempts) VALUES (?, ?, ?, 0)')
+    .run(phone, sha(otp), expires_at);
+
+  console.log(`OTP for ${phone}: ${otp}`); // real SMS goes here later
+  res.json({ message: 'OTP sent' });
+});
+
+app.post('/verify-otp', (req, res) => {
+  const { phone, otp } = req.body;
+
+  // 1. get what we stored for this phone
+  const row = db.prepare('SELECT * FROM otps WHERE phone = ?').get(phone);
+
+  // 2. nothing stored, expired, or too many tries -> reject
+  if (!row || row.expires_at < Date.now() || row.attempts >= 5) {
+    return res.status(400).json({ error: 'OTP expired or too many attempts' });
+  }
+
+  // 3. compare typed otp with stored hash
+  if (sha(String(otp)) !== row.otp_hash) {
+    db.prepare('UPDATE otps SET attempts = attempts + 1 WHERE phone = ?').run(phone);
+    return res.status(400).json({ error: 'Wrong OTP' });
+  }
+
+  // 4. correct: use up the otp
+  db.prepare('DELETE FROM otps WHERE phone = ?').run(phone);
+
+  // 5. create the user if new, then fetch the user
+  db.prepare('INSERT OR IGNORE INTO users (phone) VALUES (?)').run(phone);
+  const user = db.prepare('SELECT * FROM users WHERE phone = ?').get(phone);
+
+  // 6. give a token that lasts 30 days
+  const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '30d' });
+  res.json({ token });
+});
+
+// checks the token before a protected route runs
+function auth(req, res, next) {
+  const token = (req.headers.authorization || '').split(' ')[1];
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Please login' });
+  }
+}
+
+app.get('/me', auth, (req, res) => {
+  res.json(req.user);
 });
 
 app.listen(3000, () => {

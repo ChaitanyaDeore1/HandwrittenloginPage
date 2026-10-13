@@ -52,6 +52,8 @@ if (count === 0) {
     .run(r1, 'Butter Naan', 40);
   db.prepare('INSERT INTO restaurants(name, lat, lng) VALUES (?, ?, ?)')
     .run('Tasty Bites', 19.0760, 72.8777);
+  db.prepare('INSERT OR REPLACE INTO otps (phone, otp_hash, expires_at, attempts) VALUES (?, ?, ?, 0)')
+  .run(phone, crypto.createHash('sha256').update(otp).digest('hex'), expires_at);
 }
 
 module.exports = db;
