@@ -2,10 +2,32 @@ const express = require('express');
 const db = require('./db.js');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
+const path = require('path');
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
+const otpLimiter=rateLimit({
+    windowsMs:10*1000,
+    limit:3,
+    message:{
+        error: 'Too many OTP requests . Try again in a minute',
+    },
+   standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+app.get('/debug-file', (req, res) => {
+  res.json({
+    directory: __dirname,
+    filePath: path.join(__dirname, 'public', 'index.html'),
+    exists: require('fs').existsSync(
+      path.join(__dirname, 'public', 'index.html')
+    )
+  });
+});
 const MAX_KM = 10;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-only-secret';
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -20,10 +42,6 @@ function distanceKm(lat1, lng1, lat2, lng2) {
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return 6371 * 2 * Math.asin(Math.sqrt(a));
 }
-
-app.get('/', (req, res) => {
-  res.send('server is running');
-});
 
 app.get('/restaurants', (req, res) => {
   const restaurants = db.prepare('SELECT * FROM restaurants').all();
@@ -59,7 +77,7 @@ app.get('/restaurants/:id/menu', (req, res) => {
   res.json(items);
 });
 
-app.post('/send-otp', (req, res) => {
+app.post('/send-otp',otpLimiter,(req, res) => {
   const phone = req.body.phone;
 
   if (!/^\d{10}$/.test(phone || '')) {
